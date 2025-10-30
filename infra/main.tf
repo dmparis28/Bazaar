@@ -405,7 +405,7 @@ resource "aws_eks_node_group" "cde_nodes" {
   depends_on = [
     aws_iam_role_policy_attachment.eks_node_policy_1,
     aws_iam_role_policy_attachment.eks_node_policy_2,
-    aws_iam_role_policy_attachment.eks_TaintToleration.eks_node_policy_3,
+    aws_iam_role_policy_attachment.eks_node_policy_3,
   ]
 }
 
