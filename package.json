@@ -1,0 +1,17 @@
+{
+  "name": "bazaar-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bazaar: The SAQ D Marketplace & Metered Billing Platform",
+  "author": "Bazaar Engineering",
+  "scripts": {
+    "build:all": "pnpm -r build",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "dev:user-service": "pnpm --filter user-service start:dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "turbo": "^2.0.9"
+  },
+  "packageManager": "pnpm@9.6.0"
+}

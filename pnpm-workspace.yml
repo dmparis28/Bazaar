@@ -1,0 +1,5 @@
+# This file tells pnpm where to find our projects.
+packages:
+  - 'apps/*'
+  - 'apps/services/*'
+  - 'packages/*'
