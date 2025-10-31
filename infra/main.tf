@@ -24,6 +24,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.5"
     }
+    # ADDED THE TLS PROVIDER
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
@@ -685,39 +690,128 @@ resource "aws_msk_cluster" "bazaar_kafka" {
 # 4. SECURE DEVELOPER ACCESS (Client VPN)
 # ---
 
-# We need a way to securely access our private resources (K8s, DB)
-# We will use AWS Client VPN.
+# We need to generate our own self-signed certificates for the VPN.
+# We will create a mini Certificate Authority (CA) to do this.
 
-# First, create certificates for the VPN
-resource "aws_acm_certificate" "vpn_server_cert" {
-  domain_name       = "vpn.bazaar.internal" # Dummy domain
-  validation_method = "NONE"                # We will self-sign
-  key_algorithm     = "RSA_2048"
-  
-  lifecycle {
-    create_before_destroy = true
+# 1. Create the Private Key for our new CA
+resource "tls_private_key" "vpn_ca_key" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+# 2. Create the self-signed Root Certificate for our CA
+resource "tls_self_signed_cert" "vpn_ca_cert" {
+  private_key_pem = tls_private_key.vpn_ca_key.private_key_pem
+
+  subject {
+    common_name  = "bazaar.vpn.ca"
+    organization = "Bazaar Inc."
+  }
+
+  validity_period_hours = 8760 # 1 year
+  is_ca_certificate     = true
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "cert_signing",
+  ]
+}
+
+# 3. Create a Private Key for the VPN Server
+resource "tls_private_key" "vpn_server_key" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+# 4. Create a Certificate Signing Request (CSR) for the server
+resource "tls_cert_request" "vpn_server_csr" {
+  private_key_pem = tls_private_key.vpn_server_key.private_key_pem
+
+  subject {
+    common_name  = "server.vpn.bazaar.internal"
+    organization = "Bazaar Inc."
   }
 }
 
-resource "aws_acm_certificate" "vpn_client_cert" {
-  domain_name       = "client.bazaar.internal" # Dummy domain
-  validation_method = "NONE"
-  key_algorithm     = "RSA_2048"
-  
-  lifecycle {
-    create_before_destroy = true
+# 5. Sign the server's CSR with our CA key to create its certificate
+resource "tls_locally_signed_cert" "vpn_server_cert" {
+  cert_request_pem   = tls_cert_request.vpn_server_csr.cert_request_pem
+  ca_private_key_pem = tls_private_key.vpn_ca_key.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.vpn_ca_cert.cert_pem
+
+  validity_period_hours = 8760 # 1 year
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "server_auth",
+  ]
+}
+
+# 6. Create a Private Key for the VPN Client
+resource "tls_private_key" "vpn_client_key" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
+}
+
+# 7. Create a CSR for the client
+resource "tls_cert_request" "vpn_client_csr" {
+  private_key_pem = tls_private_key.vpn_client_key.private_key_pem
+
+  subject {
+    common_name  = "client.vpn.bazaar.internal"
+    organization = "Bazaar Inc."
+  }
+}
+
+# 8. Sign the client's CSR with our CA key to create its certificate
+resource "tls_locally_signed_cert" "vpn_client_cert" {
+  cert_request_pem   = tls_cert_request.vpn_client_csr.cert_request_pem
+  ca_private_key_pem = tls_private_key.vpn_ca_key.private_key_pem
+  ca_cert_pem        = tls_self_signed_cert.vpn_ca_cert.cert_pem
+
+  validity_period_hours = 8760 # 1 year
+
+  allowed_uses = [
+    "key_encipherment",
+    "digital_signature",
+    "client_auth",
+  ]
+}
+
+# 9. Now, IMPORT these generated certs into AWS Certificate Manager (ACM)
+resource "aws_acm_certificate" "vpn_server_cert_import" {
+  private_key       = tls_private_key.vpn_server_key.private_key_pem
+  certificate_body  = tls_locally_signed_cert.vpn_server_cert.cert_pem
+  certificate_chain = tls_self_signed_cert.vpn_ca_cert.cert_pem
+
+  tags = {
+    Name = "bazaar-vpn-server-cert"
+  }
+}
+
+resource "aws_acm_certificate" "vpn_client_cert_import" {
+  private_key       = tls_private_key.vpn_client_key.private_key_pem
+  certificate_body  = tls_locally_signed_cert.vpn_client_cert.cert_pem
+  certificate_chain = tls_self_signed_cert.vpn_ca_cert.cert_pem
+
+  tags = {
+    Name = "bazaar-vpn-client-cert"
   }
 }
 
 # The VPN Endpoint
 resource "aws_ec2_client_vpn_endpoint" "bazaar_vpn" {
   description            = "Bazaar Client VPN"
-  server_certificate_arn = aws_acm_certificate.vpn_server_cert.arn
+  # Use the ARNs from our IMPORTED certs
+  server_certificate_arn = aws_acm_certificate.vpn_server_cert_import.arn
   client_cidr_block      = "192.168.0.0/22" # CIDR for our laptops
-  
+
   authentication_options {
     type                       = "certificate-authentication"
-    root_certificate_chain_arn = aws_acm_certificate.vpn_client_cert.arn
+    # The client cert ARN is also the root CA cert ARN in this self-signed setup
+    root_certificate_chain_arn = aws_acm_certificate.vpn_client_cert_import.arn
   }
 
   connection_log_options {
@@ -725,7 +819,7 @@ resource "aws_ec2_client_vpn_endpoint" "bazaar_vpn" {
   }
 
   # Allow clients to "see" the entire VPC
-  dns_servers    = ["10.0.0.2"] # VPC's internal DNS resolver
+  dns_servers        = ["10.0.0.2"] # VPC's internal DNS resolver
   transport_protocol = "udp"
 }
 

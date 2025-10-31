@@ -68,13 +68,14 @@ output "eks_cluster_endpoint" {
 # 5. VPN CONFIG
 # ---
 output "vpn_client_config" {
-  value       = aws_ec2_client_vpn_endpoint.bazaar_vpn.client_connect_options[0].dns_name != "" ? templatefile("vpn_config.ovpn", {
-    vpn_dns_name = aws_ec2_client_vpn_endpoint.bazaar_vpn.client_connect_options[0].dns_name
-    server_cert  = aws_acm_certificate.vpn_server_cert.certificate_body
-    client_cert  = aws_acm_certificate.vpn_client_cert.certificate_body
-    client_key   = aws_acm_certificate.vpn_client_cert.private_key
+  value = aws_ec2_client_vpn_endpoint.bazaar_vpn.dns_name != "" ? templatefile("vpn_config.ovpn", {
+    vpn_dns_name = aws_ec2_client_vpn_endpoint.bazaar_vpn.dns_name
+    # Point to the TLS provider resources, not the ACM ones
+    server_cert  = tls_self_signed_cert.vpn_ca_cert.cert_pem
+    client_cert  = tls_locally_signed_cert.vpn_client_cert.cert_pem
+    client_key   = tls_private_key.vpn_client_key.private_key_pem
   }) : "VPN endpoint is still creating, please 'terraform apply' again in a few minutes."
   description = "The .ovpn file content for the Client VPN"
-  sensitive = true
+  sensitive   = true
 }
 
