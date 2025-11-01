@@ -28,16 +28,16 @@ terraform {
 }
 
 provider "aws" {
-  region = var.region
+  region = var.aws_region
 }
 
 # ---
 # 1. NETWORKING (VPC)
 # ---
 module "vpc" {
-  source     = "./modules/vpc"
-  name_prefix = "bazaar"
-  region     = var.region
+  source      = "./modules/vpc"
+  name_prefix = var.name_prefix
+  region      = var.aws_region
 }
 
 # ---
@@ -45,8 +45,9 @@ module "vpc" {
 # ---
 module "eks" {
   source                  = "./modules/eks"
-  name_prefix             = "bazaar"
+  name_prefix             = var.name_prefix
   vpc_id                  = module.vpc.vpc_id
+  public_subnet_ids       = module.vpc.public_subnet_ids
   private_subnet_ids      = module.vpc.private_subnet_ids
   cde_subnet_ids          = module.vpc.cde_subnet_ids
   cluster_version         = "1.30"
@@ -58,11 +59,12 @@ module "eks" {
 # 3. DATA STORES (Database, Cache, Kafka)
 # ---
 module "data_stores" {
-  source                 = "./modules/data_stores"
-  name_prefix            = "bazaar"
-  vpc_id                 = module.vpc.vpc_id
-  private_subnet_ids     = module.vpc.private_subnet_ids
-  eks_node_security_group_id = module.eks.node_security_group_id
+  source                      = "./modules/data_stores"
+  name_prefix                 = var.name_prefix
+  vpc_id                      = module.vpc.vpc_id
+  private_subnet_ids          = module.vpc.private_subnet_ids
+  eks_node_security_group_id  = module.eks.node_security_group_id
+  cluster_security_group_id = module.eks.cluster_security_group_id
   
   depends_on = [module.eks]
 }
@@ -72,8 +74,9 @@ module "data_stores" {
 # ---
 module "vpn" {
   source              = "./modules/vpn"
-  name_prefix         = "bazaar"
+  name_prefix         = var.name_prefix
   vpc_id              = module.vpc.vpc_id
+  # --- *** THIS IS THE FIX (was vpc_cid) *** ---
   vpc_cidr_block      = module.vpc.vpc_cidr_block
   private_subnet_ids  = module.vpc.private_subnet_ids
   
