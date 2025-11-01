@@ -124,6 +124,9 @@ resource "aws_ec2_client_vpn_endpoint" "vpn" {
     enabled = false
   }
 
+  # --- *** FIX 1: ENABLE SPLIT-TUNNEL *** ---
+  split_tunnel = true
+
   dns_servers        = ["10.0.0.2"] # VPC's internal DNS resolver
   transport_protocol = "udp"
 }
@@ -139,19 +142,26 @@ resource "aws_ec2_client_vpn_network_association" "vpn_assoc_b" {
   subnet_id              = var.private_subnet_ids[1]
 }
 
-# Authorization Rule: Allow VPN clients to access everything in the VPC
-resource "aws_ec2_client_vpn_authorization_rule" "vpn_auth_all" {
+# --- *** FIX 2: AUTHORIZE *ONLY* THE VPC CIDR *** ---
+# (This resource was already correct in your file, which is great)
+resource "aws_ec2_client_vpn_authorization_rule" "vpn_auth_vpc" {
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.vpn.id
-  target_network_cidr    = var.vpc_cidr_block
+  target_network_cidr    = var.vpc_cidr_block # This is "10.0.0.0/16"
   authorize_all_groups   = true
+  description            = "Allow all users to access the VPC"
 }
 
-# Allow VPN clients to access the internet
-resource "aws_ec2_client_vpn_route" "vpn_internet_route" {
+# --- *** FIX 3: REMOVED THE 0.0.0.0/0 ROUTE *** ---
+# The resource "aws_ec2_client_vpn_route" "vpn_internet_route" has been deleted
+# as it conflicts with split-tunnel mode.
+
+# --- *** FIX 4: ADD THE *CORRECT* ROUTE FOR THE VPC *** ---
+resource "aws_ec2_client_vpn_route" "vpn_local_vpc_route" {
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.vpn.id
-  destination_cidr_block = "0.0.0.0/0"
-  target_vpc_subnet_id   = var.private_subnet_ids[0] # Route out via NAT A
-  
+  destination_cidr_block = var.vpc_cidr_block # This is our "10.0.0.0/16"
+  target_vpc_subnet_id   = var.private_subnet_ids[0] # Route to any subnet
+  description            = "Route for local VPC traffic"
+
   depends_on = [
     aws_ec2_client_vpn_network_association.vpn_assoc_a,
     aws_ec2_client_vpn_network_association.vpn_assoc_b
