@@ -13,6 +13,16 @@ resource "aws_security_group" "cluster_sg" {
     description = "Allow cluster to cluster"
   }
 
+  # --- *** THE *NEW* FIX IS HERE *** ---
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["192.168.0.0/22"] # Allow traffic from Client VPN
+    description = "Allow all traffic from Client VPN"
+  }
+  # --- *** END OF NEW FIX *** ---
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -44,6 +54,16 @@ resource "aws_security_group" "node_sg" {
     security_groups = [aws_security_group.cluster_sg.id]
     description = "Allow cluster control plane to nodes"
   }
+
+  # --- *** THE FIRST FIX (STILL NEEDED) *** ---
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["192.168.0.0/22"] # Allow traffic from Client VPN
+    description = "Allow all traffic from Client VPN"
+  }
+  # --- *** END OF FIRST FIX *** ---
 
   egress {
     from_port   = 0
