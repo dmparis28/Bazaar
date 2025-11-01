@@ -1,24 +1,24 @@
---- Node.js ---
-
-Ignore all node_modules folders
-
-**/node_modules
-.next/
-out/
-dist/
-
---- Terraform ---
-
-Ignore the local .terraform directory and state files
-
-**/.terraform/
+# Terraform specific files
+.terraform/
+*.tfstate
+*.tfstate.backup
+crash.log
+*.tfvars
+override.tf
+override.tf.json
 .terraform.lock.hcl
-terraform.tfstate
-terraform.tfstate.backup
 
---- OS & IDE ---
+# Sensitive Key Material and Configurations (CRITICAL)
+# Prevent any private keys, certificates, or configuration files containing secrets from being committed
+*.pem
+*.key
+*.crt
+*.p12
+*.ovpn
+kubeconfig
+.kube/
 
+# OS/IDE generated files
 .DS_Store
-.vscode/
 .idea/
-*.log
+.vscode/
