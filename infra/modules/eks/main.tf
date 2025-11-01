@@ -1,98 +1,226 @@
-# --- MODULE: VPN ---
-# Our secure developer "airlock" into the VPC.
+# --- MODULE: EKS ---
+# Our secure, private compute fabric.
 
-resource "tls_private_key" "ca_key" {
-  algorithm = "RSA"
-  rsa_bits  = 2048
-}
+resource "aws_security_group" "cluster_sg" {
+  name   = "${var.name_prefix}-eks-cluster-sg"
+  vpc_id = var.vpc_id
 
-resource "tls_self_signed_cert" "ca_cert" {
-  private_key_pem = tls_private_key.ca_key.private_key_pem
-  algorithm       = "RSA"
-
-  subject {
-    common_name  = "Bazaar VPN CA"
-    organization = "Bazaar Inc."
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
+    description = "Allow cluster to cluster"
   }
 
-  is_ca_certificate     = true
-  validity_period_hours = 8760 # 1 year
-  allowed_uses = [
-    "cert_signing",
-    "crl_signing",
-    "server_auth",
-    "client_auth",
-  ]
-}
-
-resource "aws_acm_certificate" "server_cert" {
-  private_key       = tls_private_key.ca_key.private_key_pem # Re-use CA key for simplicity
-  certificate_body  = tls_self_signed_cert.ca_cert.cert_pem  # Re-use CA cert for simplicity
-  certificate_chain = tls_self_signed_cert.ca_cert.cert_pem
-}
-
-resource "aws_acm_certificate" "client_cert" {
-  private_key       = tls_private_key.ca_key.private_key_pem
-  certificate_body  = tls_self_signed_cert.ca_cert.cert_pem
-  certificate_chain = tls_self_signed_cert.ca_cert.cert_pem
-}
-
-resource "aws_ec2_client_vpn_endpoint" "this" {
-  description            = "${var.name_prefix}-client-vpn"
-  server_certificate_arn = aws_acm_certificate.server_cert.arn
-  client_cidr_block      = "192.168.0.0/22" # Our VPN client IP range
-
-  authentication_options {
-    type                       = "certificate-authentication"
-    root_certificate_chain_arn = aws_acm_certificate.client_cert.arn
+  # --- FIX: Allow traffic from Client VPN ---
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["192.168.0.0/22"]
+    description = "Allow all traffic from Client VPN"
   }
 
-  connection_log_options {
-    enabled = false # Can be enabled for production
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
-
-  # Use split-tunnel to only route VPC traffic
-  split_tunnel = true
 
   tags = {
-    Name = "${var.name_prefix}-client-vpn"
+    Name = "${var.name_prefix}-eks-cluster-sg"
   }
 }
 
-resource "aws_ec2_client_vpn_network_association" "a" {
-  client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.this.id
-  subnet_id              = var.private_subnet_ids[0]
+resource "aws_security_group" "node_sg" {
+  name   = "${var.name_prefix}-eks-node-sg"
+  vpc_id = var.vpc_id
+
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
+    description = "Allow node to node"
+  }
+
+  ingress {
+    from_port       = 0
+    to_port         = 0
+    protocol        = "-1"
+    security_groups = [aws_security_group.cluster_sg.id]
+    description     = "Allow cluster control plane to nodes"
+  }
+
+  # --- FIX: Allow traffic from Client VPN ---
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["192.168.0.0/22"]
+    description = "Allow all traffic from Client VPN"
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.name_prefix}-eks-node-sg"
+  }
 }
 
-resource "aws_ec2_client_vpn_network_association" "b" {
-  client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.this.id
-  subnet_id              = var.private_subnet_ids[1]
+resource "aws_iam_role" "cluster_role" {
+  name = "${var.name_prefix}-eks-cluster-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "eks.amazonaws.com"
+        }
+      },
+    ]
+  })
 }
 
-# --- *** FIX 1: REMOVED THE 0.0.0.0/0 ROUTE *** ---
-# We are in split-tunnel mode, so we should NOT route all internet traffic.
-# This resource has been deleted.
+resource "aws_iam_role_policy_attachment" "cluster_policy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.cluster_role.name
+}
 
-# --- *** FIX 2: THIS IS NOW THE *ONLY* ROUTE *** ---
-resource "aws_ec2_client_vpn_route" "vpn_local_vpc_route" {
-  client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.this.id
-  destination_cidr_block = var.vpc_cidr # This is our "10.0.0.0/16"
-  target_vpc_subnet_id   = var.private_subnet_ids[0] # Route to any subnet
-  description            = "Route for local VPC traffic"
+resource "aws_iam_role" "node_role" {
+  name = "${var.name_prefix}-eks-node-role"
 
-  # --- *** FIX 3: DEPEND ON *BOTH* SUBNET ASSOCIATIONS *** ---
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "node_policy_1" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.node_role.name
+}
+
+resource "aws_iam_role_policy_attachment" "node_policy_2" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.node_role.name
+}
+
+resource "aws_iam_role_policy_attachment" "node_policy_3" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.node_role.name
+}
+
+resource "aws_kms_key" "secrets_key" {
+  description             = "KMS key for encrypting ${var.name_prefix} EKS secrets"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
+}
+
+resource "aws_eks_cluster" "this" {
+  name     = "${var.name_prefix}-cluster"
+  role_arn = aws_iam_role.cluster_role.arn
+  version  = var.cluster_version
+
+  vpc_config {
+    security_group_ids = [aws_security_group.cluster_sg.id, aws_security_group.node_sg.id]
+    subnet_ids = concat(
+      var.private_subnet_ids,
+      var.cde_subnet_ids
+    )
+    endpoint_private_access = true
+    endpoint_public_access  = false
+  }
+
+  encryption_config {
+    provider {
+      key_arn = aws_kms_key.secrets_key.arn
+    }
+    resources = ["secrets"]
+  }
+
   depends_on = [
-    aws_ec2_client_vpn_network_association.a,
-    aws_ec2_client_vpn_network_association.b
+    aws_iam_role_policy_attachment.cluster_policy,
   ]
 }
-# --- *** END OF FIXES *** ---
 
-# --- *** FIX 4: AUTHORIZE *ONLY* THE VPC CIDR *** ---
-resource "aws_ec2_client_vpn_authorization_rule" "vpn_auth_vpc" {
-  client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.this.id
-  target_network_cidr    = var.vpc_cidr # Was 0.0.0.0/0
-  authorize_all_groups   = true
-  description            = "Allow all users to access the VPC"
+resource "aws_eks_node_group" "general_nodes" {
+  cluster_name    = aws_eks_cluster.this.name
+  node_group_name = "general-nodes"
+  node_role_arn   = aws_iam_role.node_role.arn
+  subnet_ids      = var.private_subnet_ids
+  instance_types  = ["t3.medium"]
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 4
+    min_size     = 1
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  labels = {
+    "node-type" = "general-workloads"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node_policy_1,
+    aws_iam_role_policy_attachment.node_policy_2,
+    aws_iam_role_policy_attachment.node_policy_3,
+  ]
+}
+
+resource "aws_eks_node_group" "cde_nodes" {
+  cluster_name    = aws_eks_cluster.this.name
+  node_group_name = "cde-nodes"
+  node_role_arn   = aws_iam_role.node_role.arn
+  subnet_ids      = var.cde_subnet_ids
+  instance_types  = ["t3.medium"]
+
+  scaling_config {
+    desired_size = 1
+    max_size     = 2
+    min_size     = 1
+  }
+
+  update_config {
+    max_unavailable = 1
+  }
+
+  taint {
+    key    = "cde"
+    value  = "true"
+    effect = "NO_SCHEDULE"
+  }
+
+  labels = {
+    "node-type" = "cde-secure-nodes"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node_policy_1,
+    aws_iam_role_policy_attachment.node_policy_2,
+    aws_iam_role_policy_attachment.node_policy_3,
+  ]
 }
 

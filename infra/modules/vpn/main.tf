@@ -143,7 +143,6 @@ resource "aws_ec2_client_vpn_network_association" "vpn_assoc_b" {
 }
 
 # --- *** FIX 2: AUTHORIZE *ONLY* THE VPC CIDR *** ---
-# (This resource was already correct in your file, which is great)
 resource "aws_ec2_client_vpn_authorization_rule" "vpn_auth_vpc" {
   client_vpn_endpoint_id = aws_ec2_client_vpn_endpoint.vpn.id
   target_network_cidr    = var.vpc_cidr_block # This is "10.0.0.0/16"
